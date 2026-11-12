@@ -17,7 +17,7 @@ jobs:
       - name: Proje dosyalarini olustur
         run: |
           P=app/src/main
-          mkdir -p $P/java/com/example/tvmon $P/res/xml $P/res/values
+          mkdir -p $P/java/com/example/tvmon $P/res/xml $P/res/values $P/res/drawable
 
           cat > settings.gradle <<'EOF'
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
@@ -53,12 +53,22 @@ jobs:
 
           cat > $P/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"> <uses-feature android:name="android.hardware.touchscreen" android:required="false" /> <uses-feature android:name="android.software.leanback" android:required="false" /> <application android:label="TV Monitor" android:allowBackup="false"> <activity android:name=".MainActivity" android:exported="true" android:theme="@android:style/Theme.DeviceDefault"> <intent-filter> <action android:name="android.intent.action.MAIN" /> <category android:name="android.intent.category.LAUNCHER" /> <category android:name="android.intent.category.LEANBACK_LAUNCHER" /> </intent-filter> </activity> <service android:name=".MonService" android:exported="true" android:label="TV Monitor" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"> <intent-filter> <action android:name="android.accessibilityservice.AccessibilityService" /> </intent-filter> <meta-data android:name="android.accessibilityservice" android:resource="@xml/service_config" /> </service> </application> </manifest>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"> <uses-feature android:name="android.hardware.touchscreen" android:required="false" /> <uses-feature android:name="android.software.leanback" android:required="false" /> <application android:label="TV Monitor" android:allowBackup="false" android:icon="@drawable/ic_logo" android:banner="@drawable/banner"> <activity android:name=".MainActivity" android:exported="true" android:theme="@android:style/Theme.DeviceDefault"> <intent-filter> <action android:name="android.intent.action.MAIN" /> <category android:name="android.intent.category.LAUNCHER" /> <category android:name="android.intent.category.LEANBACK_LAUNCHER" /> </intent-filter> </activity> <service android:name=".MonService" android:exported="true" android:label="TV Monitor" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"> <intent-filter> <action android:name="android.accessibilityservice.AccessibilityService" /> </intent-filter> <meta-data android:name="android.accessibilityservice" android:resource="@xml/service_config" /> </service> </application> </manifest>
           EOF
 
           cat > $P/res/xml/service_config.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityEventTypes="typeWindowStateChanged" android:accessibilityFeedbackType="feedbackGeneric" android:notificationTimeout="1000" android:description="@string/desc" />
+          EOF
+
+          cat > $P/res/drawable/ic_logo.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108"> <path android:fillColor="#0F172A" android:pathData="M0,0h108v108h-108z" /> <path android:strokeColor="#2DD4BF" android:strokeWidth="12" android:strokeLineCap="round" android:pathData="M34,72V60" /> <path android:strokeColor="#2DD4BF" android:strokeWidth="12" android:strokeLineCap="round" android:pathData="M54,72V44" /> <path android:strokeColor="#2DD4BF" android:strokeWidth="12" android:strokeLineCap="round" android:pathData="M74,72V52" /> </vector>
+          EOF
+
+          cat > $P/res/drawable/banner.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="320dp" android:height="180dp" android:viewportWidth="320" android:viewportHeight="180"> <path android:fillColor="#0F172A" android:pathData="M0,0h320v180h-320z" /> <path android:strokeColor="#2DD4BF" android:strokeWidth="18" android:strokeLineCap="round" android:pathData="M130,109V91" /> <path android:strokeColor="#2DD4BF" android:strokeWidth="18" android:strokeLineCap="round" android:pathData="M160,109V63" /> <path android:strokeColor="#2DD4BF" android:strokeWidth="18" android:strokeLineCap="round" android:pathData="M190,109V79" /> </vector>
           EOF
 
           cat > $P/res/values/strings.xml <<'EOF'
@@ -119,9 +129,10 @@ jobs:
                   float d = getResources().getDisplayMetrics().density;
                   tv = new TextView(this);
                   tv.setTextColor(Color.WHITE);
-                  tv.setTextSize(13);
+                  tv.setTextSize(10);
                   tv.setSingleLine(true);
-                  tv.setBackgroundColor(0x99000000);
+                  tv.setBackgroundColor(Color.TRANSPARENT);
+                  tv.setShadowLayer(6f, 0f, 0f, Color.BLACK);
                   tv.setPadding((int) (10 * d), (int) (3 * d), (int) (10 * d), (int) (3 * d));
                   tv.setText("...");
                   WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
@@ -132,7 +143,8 @@ jobs:
                                   | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                                   | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                           PixelFormat.TRANSLUCENT);
-                  lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                  lp.gravity = Gravity.TOP | Gravity.LEFT;
+                  lp.x = (int) (20 * d);
                   lp.y = (int) (14 * d);
                   wm.addView(tv, lp);
                   lastRx = TrafficStats.getTotalRxBytes();
@@ -203,6 +215,72 @@ jobs:
 
               @Override public void onAccessibilityEvent(AccessibilityEvent e) { }
               @Override public void onInterrupt() { }
+
+              @Override public void onDestroy() {
+                  h.removeCallbacks(tick);
+                  try { if (tv != null) wm.removeView(tv); } catch (Exception ignored) { }
+                  super.onDestroy();
+              }
+          }
+          EOF
+
+          cat > $P/java/com/example/tvmon/MainActivity.java <<'EOF'
+          package com.example.tvmon;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.provider.Settings;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          public class MainActivity extends Activity {
+              private TextView info;
+              private final Handler h = new Handler(Looper.getMainLooper());
+              private final Runnable refresh = new Runnable() {
+                  @Override public void run() {
+                      info.setText("Durum: " + MonService.status);
+                      h.postDelayed(this, 1000);
+                  }
+              };
+
+              @Override protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  LinearLayout l = new LinearLayout(this);
+                  l.setOrientation(LinearLayout.VERTICAL);
+                  l.setPadding(80, 80, 80, 80);
+                  TextView title = new TextView(this);
+                  title.setTextSize(30);
+                  title.setText("TV Monitor");
+                  info = new TextView(this);
+                  info.setTextSize(22);
+                  Button btn = new Button(this);
+                  btn.setText("Erisilebilirlik ayarlarini ac");
+                  btn.setOnClickListener(new View.OnClickListener() {
+                      @Override public void onClick(View v) {
+                          startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                      }
+                  });
+                  l.addView(title);
+                  l.addView(info);
+                  l.addView(btn);
+                  setContentView(l);
+              }
+
+              @Override protected void onResume() { super.onResume(); h.post(refresh); }
+              @Override protected void onPause() { h.removeCallbacks(refresh); super.onPause(); }
+          }
+          EOF
+      - name: APK derle
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TV-Monitor-APK
+          path: app/build/outputs/apk/debug/app-debug.apk}
 
               @Override public void onDestroy() {
                   h.removeCallbacks(tick);
