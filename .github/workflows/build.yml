@@ -1,0 +1,206 @@
+name: Build TV Monitor APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Proje dosyalarini olustur
+        run: |
+          P=app/src/main
+          mkdir -p $P/java/com/example/tvmon $P/res/xml $P/res/values
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = 'tvmon'
+          include ':app'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=false
+          org.gradle.jvmargs=-Xmx2g
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.example.tvmon'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'com.example.tvmon'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+              buildTypes { release { minifyEnabled false } }
+          }
+          EOF
+
+          cat > $P/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"> <uses-feature android:name="android.hardware.touchscreen" android:required="false" /> <uses-feature android:name="android.software.leanback" android:required="false" /> <application android:label="TV Monitor" android:allowBackup="false"> <service android:name=".MonService" android:exported="true" android:label="TV Monitor" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"> <intent-filter> <action android:name="android.accessibilityservice.AccessibilityService" /> </intent-filter> <meta-data android:name="android.accessibilityservice" android:resource="@xml/service_config" /> </service> </application> </manifest>
+          EOF
+
+          cat > $P/res/xml/service_config.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityEventTypes="typeWindowStateChanged" android:accessibilityFeedbackType="feedbackGeneric" android:notificationTimeout="1000" android:description="@string/desc" />
+          EOF
+
+          cat > $P/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="desc">Ekranin ustunde indirme, yukleme, CPU ve RAM kullanimini gosterir.</string>
+          </resources>
+          EOF
+
+          cat > $P/java/com/example/tvmon/MonService.java <<'EOF'
+          package com.example.tvmon;
+
+          import android.accessibilityservice.AccessibilityService;
+          import android.app.ActivityManager;
+          import android.graphics.Color;
+          import android.graphics.PixelFormat;
+          import android.net.TrafficStats;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.os.SystemClock;
+          import android.view.Gravity;
+          import android.view.WindowManager;
+          import android.view.accessibility.AccessibilityEvent;
+          import android.widget.TextView;
+
+          import java.io.BufferedReader;
+          import java.io.FileReader;
+
+          public class MonService extends AccessibilityService {
+              private static final long INTERVAL = 1500;
+              private WindowManager wm;
+              private TextView tv;
+              private final Handler h = new Handler(Looper.getMainLooper());
+              private long lastRx, lastTx, lastT, lastTotal, lastIdle;
+              private final StringBuilder sb = new StringBuilder(64);
+
+              private final Runnable tick = new Runnable() {
+                  @Override public void run() {
+                      update();
+                      h.postDelayed(this, INTERVAL);
+                  }
+              };
+
+              @Override protected void onServiceConnected() {
+                  wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                  float d = getResources().getDisplayMetrics().density;
+                  tv = new TextView(this);
+                  tv.setTextColor(Color.WHITE);
+                  tv.setTextSize(13);
+                  tv.setSingleLine(true);
+                  tv.setBackgroundColor(0x99000000);
+                  tv.setPadding((int) (10 * d), (int) (3 * d), (int) (10 * d), (int) (3 * d));
+                  tv.setText("...");
+                  WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                  | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                  | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                          PixelFormat.TRANSLUCENT);
+                  lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                  lp.y = (int) (14 * d);
+                  wm.addView(tv, lp);
+                  lastRx = TrafficStats.getTotalRxBytes();
+                  lastTx = TrafficStats.getTotalTxBytes();
+                  lastT = SystemClock.elapsedRealtime();
+                  h.postDelayed(tick, INTERVAL);
+              }
+
+              private void update() {
+                  long now = SystemClock.elapsedRealtime();
+                  long rx = TrafficStats.getTotalRxBytes();
+                  long tx = TrafficStats.getTotalTxBytes();
+                  long dt = Math.max(1, now - lastT);
+                  long down = Math.max(0, (rx - lastRx) * 1000 / dt);
+                  long up = Math.max(0, (tx - lastTx) * 1000 / dt);
+                  lastRx = rx; lastTx = tx; lastT = now;
+
+                  ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+                  ((ActivityManager) getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(mi);
+                  int ram = mi.totalMem > 0 ? (int) ((mi.totalMem - mi.availMem) * 100 / mi.totalMem) : 0;
+
+                  sb.setLength(0);
+                  sb.append("\u2193 ").append(speed(down))
+                    .append(" \u2191 ").append(speed(up))
+                    .append(" CPU ").append(cpu())
+                    .append(" RAM %").append(ram);
+                  tv.setText(sb);
+              }
+
+              private static String speed(long b) {
+                  if (b >= 1024 * 1024) {
+                      long t = b * 10 / (1024 * 1024);
+                      return (t / 10) + "." + (t % 10) + " MB/s";
+                  }
+                  return (b / 1024) + " KB/s";
+              }
+
+              // Once /proc/stat dener (Android 8+ engelleyebilir), olmazsa frekanstan tahmin eder.
+              private String cpu() {
+                  try (BufferedReader r = new BufferedReader(new FileReader("/proc/stat"))) {
+                      String[] p = r.readLine().trim().split("\\s+");
+                      long total = 0;
+                      for (int i = 1; i <= 8 && i < p.length; i++) total += Long.parseLong(p[i]);
+                      long idle = Long.parseLong(p[4]) + Long.parseLong(p[5]);
+                      long dT = total - lastTotal, dI = idle - lastIdle;
+                      lastTotal = total; lastIdle = idle;
+                      if (dT > 0 && lastTotal != dT) return "%" + (int) ((dT - dI) * 100 / dT);
+                  } catch (Exception ignored) { }
+                  try {
+                      long cur = 0, max = 0;
+                      for (int i = 0; i < 8; i++) {
+                          String b = "/sys/devices/system/cpu/cpu" + i + "/cpufreq/";
+                          cur += readLong(b + "scaling_cur_freq");
+                          max += readLong(b + "cpuinfo_max_freq");
+                      }
+                      if (max > 0) return "~%" + (int) (cur * 100 / max);
+                  } catch (Exception ignored) { }
+                  return "--";
+              }
+
+              private static long readLong(String path) {
+                  try (BufferedReader r = new BufferedReader(new FileReader(path))) {
+                      return Long.parseLong(r.readLine().trim());
+                  } catch (Exception e) {
+                      return 0;
+                  }
+              }
+
+              @Override public void onAccessibilityEvent(AccessibilityEvent e) { }
+              @Override public void onInterrupt() { }
+
+              @Override public void onDestroy() {
+                  h.removeCallbacks(tick);
+                  try { if (tv != null) wm.removeView(tv); } catch (Exception ignored) { }
+                  super.onDestroy();
+              }
+          }
+          EOF
+      - name: APK derle
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TV-Monitor-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
